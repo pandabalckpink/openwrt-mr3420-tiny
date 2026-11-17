@@ -46,27 +46,28 @@ jobs:
           echo '--- profiles (mr3420) ---'
           grep -o 'tl-mr3420[^ ]*' .targetinfo | sort -u || true
 
-      - name: Trim defaults (drop web UI if present, drop ppp/v6)
+      - name: Trim defaults (no web UI, no wifi, no ppp/v6)
         run: |
           set -euo pipefail
           cd ib
           cp .targetinfo .targetinfo.orig
-          sed -i -E 's/\b(luci(-[a-z0-9-]+)?|uhttpd|ppp|ppp-mod-pppoe|odhcpd|odhcp6c|ip6tables)\b//g' .targetinfo
+          sed -i -E 's/\b(luci(-[a-z0-9-]+)?|uhttpd|ppp|ppp-mod-pppoe|odhcpd|odhcp6c|ip6tables|kmod-ath9k|wpad-mini|iwinfo|kmod-ath|kmod-cfg80211|kmod-mac80211)\b//g' .targetinfo
           sed -i -E 's/  +/ /g' .targetinfo
           echo '--- after trim ---'
-          grep -n 'DEFAULT_PACKAGES' .targetinfo || true
+          grep -n 'Default-Packages' .targetinfo | tail -3
 
       - name: Build image
         run: |
           set -euo pipefail
+          set -o pipefail
           cd ib
           EXTRA="${{ github.event.inputs.packages }}"
-          # This device's Target-Profile-Packages only lists usb cores, so the
-          # WiFi driver has to be requested explicitly.
-          PACKS="kmod-fs-ext4 kmod-usb-storage kmod-usb-storage-extras block-mount e2fsprogs \
-                 kmod-ath9k wpad-mini iwinfo $EXTRA"
+          # 4 MB device, no wifi needed: ext4 + block-mount + e2fsprogs only.
+          PACKS="kmod-fs-ext4 kmod-usb-storage block-mount e2fsprogs $EXTRA"
           echo "PACKAGES=$PACKS"
           make image PROFILE=DEVICE_tl-mr3420-v1 PACKAGES="$PACKS" -j"$(nproc)" 2>&1 | tail -60
+          echo '--- artifacts ---'
+          ls -l bin/targets/ar71xx/generic/
           echo '--- artifacts ---'
           ls -l bin/targets/ar71xx/generic/ || true
 
@@ -84,7 +85,7 @@ jobs:
         with:
           name: mr3420-firmware
           path: |
-            ib/bin/targets/ar71xx/generic/*.bin
+            ib/bin/targets/ar71xx/generic/*tl-mr3420*.bin
             ib/.targetinfo
           if-no-files-found: warn
           retention-days: 14
