@@ -62,8 +62,9 @@ jobs:
           set -o pipefail
           cd ib
           EXTRA="${{ github.event.inputs.packages }}"
-          # 4 MB device, no wifi needed: ext4 + block-mount + e2fsprogs only.
-          PACKS="kmod-fs-ext4 kmod-usb-storage block-mount e2fsprogs $EXTRA"
+          # 4 MB device, no wifi needed. ext4+e2fsprogs cost 424 KB and overshot the
+          # 3904 KB limit; f2fs (driver 97 KB + mkf2fs) does the same job for ~173 KB.
+          PACKS="kmod-fs-f2fs mkf2fs block-mount kmod-usb-storage $EXTRA"
           echo "PACKAGES=$PACKS"
           make image PROFILE=DEVICE_tl-mr3420-v1 PACKAGES="$PACKS" -j"$(nproc)" 2>&1 | tail -60
           echo '--- artifacts ---'
