@@ -1,0 +1,90 @@
+name: build-mr3420
+
+# Trimmed LEDE 17.01.7 for TP-Link TL-MR3420 v1 (AR7241, 4 MB flash / 32 MB RAM).
+# No LuCI (SSH only), but ext4 + block-mount + e2fsprogs are baked into squashfs so
+# the overlay can be moved to a USB stick (extroot) instead of living in the
+# 384 KB rootfs_data partition.
+on:
+  push:
+    branches: [ main ]
+  workflow_dispatch:
+    inputs:
+      packages:
+        description: 'Extra packages (space separated)'
+        required: false
+        default: ''
+
+jobs:
+  build:
+    runs-on: ubuntu-22.04
+    timeout-minutes: 40
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install host deps
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq build-essential libncurses5 libssl-dev \
+            zlib1g-dev xz-utils wget rsync python3 || true
+
+      - name: Fetch ImageBuilder
+        run: |
+          set -euo pipefail
+          URL=https://archive.openwrt.org/releases/17.01.7/targets/ar71xx/generic/lede-imagebuilder-17.01.7-ar71xx-generic.Linux-x86_64.tar.xz
+          curl -fsSL --retry 3 -o ib.tar.xz "$URL"
+          mkdir -p ib
+          tar -xJf ib.tar.xz -C ib --strip-components=1
+          echo '--- imagebuilder root ---'
+          ls ib | head
+
+      - name: Show default package set
+        run: |
+          set -euo pipefail
+          cd ib
+          echo '--- DEFAULT_PACKAGES ---'
+          grep -n 'DEFAULT_PACKAGES' .targetinfo || true
+          echo '--- profiles (mr3420) ---'
+          grep -o 'tl-mr3420[^ ]*' .targetinfo | sort -u || true
+
+      - name: Trim defaults (drop web UI if present, drop ppp/v6)
+        run: |
+          set -euo pipefail
+          cd ib
+          cp .targetinfo .targetinfo.orig
+          sed -i -E 's/\b(luci(-[a-z0-9-]+)?|uhttpd|ppp|ppp-mod-pppoe|odhcpd|odhcp6c|ip6tables)\b//g' .targetinfo
+          sed -i -E 's/  +/ /g' .targetinfo
+          echo '--- after trim ---'
+          grep -n 'DEFAULT_PACKAGES' .targetinfo || true
+
+      - name: Build image
+        run: |
+          set -euo pipefail
+          cd ib
+          EXTRA="${{ github.event.inputs.packages }}"
+          # This device's Target-Profile-Packages only lists usb cores, so the
+          # WiFi driver has to be requested explicitly.
+          PACKS="kmod-fs-ext4 kmod-usb-storage kmod-usb-storage-extras block-mount e2fsprogs \
+                 kmod-ath9k wpad-mini iwinfo $EXTRA"
+          echo "PACKAGES=$PACKS"
+          make image PROFILE=DEVICE_tl-mr3420-v1 PACKAGES="$PACKS" -j"$(nproc)" 2>&1 | tail -60
+          echo '--- artifacts ---'
+          ls -l bin/targets/ar71xx/generic/ || true
+
+      - name: Report sizes
+        run: |
+          cd ib/bin/targets/ar71xx/generic || exit 1
+          for f in *.bin; do
+            sz=$(stat -c%s "$f")
+            printf '%-72s %8d bytes  (%d KB, limit 3904 KB)\n' "$f" "$sz" "$((sz/1024))"
+          done
+
+      - name: Upload firmware
+        uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: mr3420-firmware
+          path: |
+            ib/bin/targets/ar71xx/generic/*.bin
+            ib/.targetinfo
+          if-no-files-found: warn
+          retention-days: 14
